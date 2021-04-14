@@ -1,0 +1,25 @@
+:root {
+  --toolbar-height: 48px;
+  --toolbar-background: #202020;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+#toolbar {
+  height: var(--toolbar-height);
+  background-color: var(--toolbar-background);
+}
+
+#editor {
+  height: calc(100vh - var(--toolbar-height));
+  display: flex;
+}
+
+#canvas {
+  outline: none;
+}
+
