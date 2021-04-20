@@ -1,6 +1,9 @@
 :root {
   --toolbar-height: 48px;
   --toolbar-background: #202020;
+  --toolbar-background-selected: #1E538F;
+  --toolbar-background-hover: #000000;
+  --left-panel-background-selected: #87B9E7;
 }
 
 body {
@@ -14,6 +17,19 @@ body {
   background-color: var(--toolbar-background);
 }
 
+.toolbar-button {
+  background-color: unset;
+  border: none;
+  color: white;
+  height: 100%;
+}
+.toolbar-button-selected {
+  background-color: var(--toolbar-background-selected);
+}
+.toolbar-button:hover {
+  background-color: var(--toolbar-background-hover);
+}
+
 #editor {
   height: calc(100vh - var(--toolbar-height));
   display: flex;
@@ -21,5 +37,30 @@ body {
 
 #canvas {
   outline: none;
+  image-rendering: smooth;
+}
+
+#left-panel {
+  margin-block-start: unset;
+  margin-block-end: unset;
+  padding-inline-start: unset;
+}
+
+.left-panel-option {
+  list-style: none;
+}
+
+.left-panel-option > button {
+  background-color: unset;
+  border: solid 1px transparent;
+}
+
+.left-panel-option > button:hover {
+  box-sizing: border-box;
+  border: solid 1px var(--left-panel-background-selected);
+}
+
+.left-panel-option-selected > button {
+  background-color: var(--left-panel-background-selected);
 }
 
