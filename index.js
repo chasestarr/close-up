@@ -71,6 +71,7 @@ class Transform {
 }
 
 const F_KEY = 70;
+const X_KEY = 88;
 
 function local_mouse_position(canvas, global_x, global_y) {
   const canvasRect = canvas.getBoundingClientRect();
@@ -103,6 +104,66 @@ function draw_checkerboard(ctx, transform, count, c1, c2) {
   }
 }
 
+function imagedata_to_image(imagedata) {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  canvas.width = imagedata.width;
+  canvas.height = imagedata.height;
+  context.putImageData(imagedata, 0, 0);
+  const im = new Image();
+  im.src = canvas.toDataURL();
+  return im;
+}
+
+function image_data(img) {
+  const offscreen = new OffscreenCanvas(img.naturalWidth, img.naturalHeight);
+  const context = offscreen.getContext('2d');
+  context.drawImage(img, 0, 0);
+  return context.getImageData(0, 0, img.naturalWidth, img.naturalHeight);
+}
+
+function image_subtract(img_a, img_b) {
+  const data_a = image_data(img_a);
+  const data_b = image_data(img_b);
+  const width = Math.max(data_a.width, data_b.width);
+  const height = Math.max(data_a.height, data_b.height);
+
+  function get_value(src, x, y){
+    const channels = 4;
+    if (x < src.width && y < src.height) {
+      const start = (y * src.width + x) * channels;
+      return [
+        src.data[start],
+        src.data[start + 1],
+        src.data[start + 2],
+        src.data[start + 3],
+      ];
+    }
+    return [0, 0, 0, 0];
+  }
+
+  let index = 0;
+  let im = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const [ra, ga, ba, aa] = get_value(data_a, x, y);
+      const [rb, gb, bb, ab] = get_value(data_b, x, y);
+      const r = Math.abs(ra - rb);
+      const g = Math.abs(ga - gb);
+      const b = Math.abs(ba - bb);
+
+      const dist = r + g + b;
+      im[index] = dist > 0 ? 255 : 0;
+      im[index + 1] = 0;
+      im[index + 2] = 0;
+      im[index + 3] = dist;
+      index += 4;
+    }
+  }
+  const imagedata = new ImageData(Uint8ClampedArray.from(im), width, height);
+  return imagedata_to_image(imagedata);
+}
+
 const MODE_TWO_UP = 0;
 const MODE_SLIDE = 1;
 
@@ -121,14 +182,24 @@ function CloseUp(canvas, img_a, img_b) {
   fit();
 
   context.imageSmoothingQuality = 'high';
-
   canvas.addEventListener('wheel', handle_wheel);
   canvas.addEventListener('mousemove', handle_mouse_move);
   canvas.addEventListener('mousedown', handle_mouse_down);
   canvas.addEventListener('mouseup', handle_mouse_up);
   canvas.addEventListener('mouseleave', handle_mouse_leave);
   canvas.addEventListener('keydown', handle_key_down);
+  canvas.addEventListener('keyup', handle_key_up);
   canvas.oncontextmenu = () => false;
+
+  let draw_diff = false;
+  let diff_img_a = null;
+  let diff_img_b = null;
+  function load_diff() {
+    requestAnimationFrame(() => {
+      diff_img_a = image_subtract(img_a, img_b);
+      diff_img_b = image_subtract(img_b, img_a);
+    });
+  }
 
   function cleanup() {
     canvas.removeEventListener('wheel', handle_wheel);
@@ -137,6 +208,7 @@ function CloseUp(canvas, img_a, img_b) {
     canvas.removeEventListener('mouseup', handle_mouse_up);
     canvas.removeEventListener('mouseleave', handle_mouse_leave);
     canvas.removeEventListener('keydown', handle_key_down);
+    canvas.removeEventListener('keyup', handle_key_up);
   }
 
   function handle_wheel(event) {
@@ -180,6 +252,8 @@ function CloseUp(canvas, img_a, img_b) {
       }
     }
 
+    canvas.focus();
+
     update();
   }
 
@@ -207,6 +281,17 @@ function CloseUp(canvas, img_a, img_b) {
   function handle_key_down(event) {
     if (event.keyCode === F_KEY) {
       fit();
+    }
+    if (event.keyCode === X_KEY) {
+      draw_diff = true;
+    }
+
+    update();
+  }
+
+  function handle_key_up(event) {
+    if (event.keyCode === X_KEY) {
+      draw_diff = false;
       update();
     }
   }
@@ -242,7 +327,25 @@ function CloseUp(canvas, img_a, img_b) {
     context.fillRect(0, 0, frame_width, canvas.height);
 
     draw_rect(context, left, [0, 0], [img_b.naturalWidth, img_b.naturalHeight], "#FECB4D");
-    draw_image(context, left, img_a);
+    const [width_a, height_a] = left.mult_vector([img_a.naturalWidth, img_a.naturalHeight]);
+    const [width_b, height_b] = right.mult_vector([img_b.naturalWidth, img_b.naturalHeight]);
+
+    context.drawImage(
+      img_a,
+      left.translate_x,
+      left.translate_y,
+      width_a,
+      height_a,
+    );
+
+    if (draw_diff && diff_img_a) {
+      context.drawImage(
+        diff_img_a,
+        left.translate_x,
+        left.translate_y,
+        ...left.mult_vector([diff_img_a.width, diff_img_a.height]),
+      );
+    }
 
     context.save();
     context.clip(context.rect(frame_width, 0, frame_width, canvas.height));
@@ -251,7 +354,22 @@ function CloseUp(canvas, img_a, img_b) {
     context.fillRect(frame_width, 0, frame_width, canvas.height);
 
     draw_rect(context, right, [0, 0], [img_a.naturalWidth, img_a.naturalHeight], "#FECB4D");
-    draw_image(context, right, img_b);
+    context.drawImage(
+      img_b,
+      right.translate_x,
+      right.translate_y,
+      width_b,
+      height_b,
+    );
+
+    if (draw_diff && diff_img_b) {
+      context.drawImage(
+        diff_img_b,
+        right.translate_x,
+        right.translate_y,
+        ...right.mult_vector([diff_img_b.width, diff_img_b.height]),
+      );
+    }
 
     context.restore();
   }
@@ -262,6 +380,11 @@ function CloseUp(canvas, img_a, img_b) {
 
     let a_size = transform.mult_vector([img_a.naturalWidth, img_a.naturalHeight]);
     context.drawImage(img_a, transform.translate_x, transform.translate_y, a_size[0], a_size[1]);
+
+    // if (draw_diff && diff_img_a) {
+    //   let a_diff_size = transform.mult_vector([diff_img_a.width, diff_img_a.height]);
+    //   context.drawImage(diff_img_a, transform.translate_x, transform.translate_y, a_diff_size[0], a_diff_size[1]);
+    // }
 
     context.fillStyle = "#ffda3a";
     if (slide_horiz) {
@@ -278,6 +401,18 @@ function CloseUp(canvas, img_a, img_b) {
         transform.translate_x + b_hidden_size[0], transform.translate_y,
         b_full_size[0] - b_hidden_size[0], b_full_size[1],
       );
+
+      if (draw_diff && diff_img_b) {
+        const diff_b_full_size = transform.mult_vector([diff_img_b.width, diff_img_b.height]);
+        context.drawImage(
+          diff_img_b,
+          slide_x, 0,
+          diff_img_b.width - slide_x, diff_img_b.height,
+          transform.translate_x + b_hidden_size[0], transform.translate_y,
+          diff_b_full_size[0] - b_hidden_size[0], diff_b_full_size[1],
+        );
+      }
+
       context.fillRect(mouse_x, 0, 1, canvas.height);
     } else {
       const inverse = transform.inverse();
@@ -293,6 +428,18 @@ function CloseUp(canvas, img_a, img_b) {
         transform.translate_x, transform.translate_y + b_hidden_size[1],
         b_full_size[0], b_full_size[1] - b_hidden_size[1],
       );
+
+      if (draw_diff && diff_img_b) {
+        const diff_b_full_size = transform.mult_vector([diff_img_b.width, diff_img_b.height]);
+        context.drawImage(
+          diff_img_b,
+          0, slide_y,
+          diff_img_b.width, diff_img_b.height - slide_y,
+          transform.translate_x, transform.translate_y + b_hidden_size[1],
+          diff_b_full_size[0], diff_b_full_size[1] - b_hidden_size[1],
+        );
+      }
+
       context.fillRect(0, mouse_y, canvas.width, 1);
     }
   }
@@ -307,6 +454,10 @@ function CloseUp(canvas, img_a, img_b) {
           draw_slide();
         }
         update_waiting = false;
+
+        if (!diff_img_a && !diff_img_b) {
+          load_diff();
+        }
       });
     }
   }
@@ -349,7 +500,6 @@ async function main() {
   let close_up = null;
 
   canvas.addEventListener('keydown', event => {
-    console.log(event.keyCode);
     if (event.keyCode === 49) {
       close_up.set_mode(MODE_TWO_UP);
     }
@@ -383,6 +533,10 @@ async function main() {
     ['images/morris-off.jpg', 'images/morris-on.jpg'],
     ['images/snuff-out.png', 'images/statecraft.png'],
     ['images/data-table-before.png', 'images/data-table-after.png'],
+    [
+      'https://c1.scryfall.com/file/scryfall-cards/large/front/b/c/bc98d888-4af3-43a3-b035-40c651057b6e.jpg?1559591998',
+      'https://c1.scryfall.com/file/scryfall-cards/large/front/a/0/a0f5c6bc-65dc-42a1-a62d-a0b101310a1f.jpg?1559596932'
+    ]
   ];
   const option_elements = options.map(([url_a, url_b], index) => {
     const li = document.createElement('li');
@@ -407,7 +561,6 @@ async function main() {
     });
     li.appendChild(button);
     left.appendChild(li);
-
     return li;
   });
 
