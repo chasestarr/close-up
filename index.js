@@ -529,14 +529,13 @@ async function main() {
 
   let selected_option_index = 2;
   const options = [
-    ['images/snuff-out.png', 'images/snuff-out.png'],
     ['images/morris-off.jpg', 'images/morris-on.jpg'],
+    // https://www.kaggle.com/vbookshelf/computed-tomography-ct-images
+    ['images/ct-scan-01.jpg', 'images/ct-scan-02.jpg'],
+    // https://www.kaggle.com/kmader/aerial-change-detection-in-video-games
+    ['images/game-aerial-before.png', 'images/game-aerial-after.png'],
     ['images/snuff-out.png', 'images/statecraft.png'],
     ['images/data-table-before.png', 'images/data-table-after.png'],
-    [
-      'https://c1.scryfall.com/file/scryfall-cards/large/front/b/c/bc98d888-4af3-43a3-b035-40c651057b6e.jpg?1559591998',
-      'https://c1.scryfall.com/file/scryfall-cards/large/front/a/0/a0f5c6bc-65dc-42a1-a62d-a0b101310a1f.jpg?1559596932'
-    ]
   ];
   const option_elements = options.map(([url_a, url_b], index) => {
     const li = document.createElement('li');
