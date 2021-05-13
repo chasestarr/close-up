@@ -61,66 +61,6 @@ class Transform {
   }
 }
 
-const vertex_shader_source = `#version 300 es
-  in vec4 a_position;
-  in vec2 a_texcoord;
-
-  uniform mat4 u_matrix;
-
-  out vec2 v_texcoord;
-
-  void main() {
-     gl_Position = u_matrix * a_position;
-     v_texcoord = a_texcoord;
-  }
-`;
-
-// https://jorenjoestar.github.io/post/pixel_art_filtering/
-// https://github.com/Jam3/glsl-fast-gaussian-blur
-const fragment_shader_source = `#version 300 es
-  precision highp float;
-
-  in vec2 v_texcoord;
-
-  uniform sampler2D tex;
-  uniform float u_scale;
-
-  out vec4 outColor;
-
-  vec2 uv_iq(vec2 uv, ivec2 texture_size) {
-    vec2 pixel = uv * vec2(texture_size);
-
-    vec2 seam = floor(pixel + 0.5);
-    vec2 dudv = fwidth(pixel);
-    pixel = seam + clamp((pixel - seam) / dudv, -0.5, 0.5);
-
-    return pixel / vec2(texture_size);
-  }
-
-  vec4 blur9(sampler2D image, vec2 uv, vec2 resolution, vec2 direction) {
-    vec4 color = vec4(0.0);
-    vec2 off1 = vec2(1.3846153846) * direction;
-    vec2 off2 = vec2(3.2307692308) * direction;
-    color += texture(image, uv) * 0.2270270270;
-    color += texture(image, uv + (off1 / resolution)) * 0.3162162162;
-    color += texture(image, uv - (off1 / resolution)) * 0.3162162162;
-    color += texture(image, uv + (off2 / resolution)) * 0.0702702703;
-    color += texture(image, uv - (off2 / resolution)) * 0.0702702703;
-    return color;
-  }
-
-  void main() {
-    if (u_scale > 2.0) {
-      vec2 uv = uv_iq(v_texcoord, textureSize(tex, 0));
-      outColor = texture(tex, uv);
-    } else if (u_scale < 0.2) {
-      outColor = blur9(tex, v_texcoord, vec2(textureSize(tex, 0)), vec2(1.0, 1.0));
-    } else {
-      outColor = texture(tex, v_texcoord);
-    }
-  }
-`;
-
 function create_shader(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -212,96 +152,72 @@ function local_mouse_position(canvas, global_x, global_y) {
   return [x, y];
 }
 
-async function CloseUp(image_url_a, image_url_b) {
-  const canvas = document.getElementById('canvas');
-  const gl = canvas.getContext('webgl2');
-
-  let mode = MODE_SLIDE;
-  let transform = new Transform();
+function Slide(canvas, transform, image_a, image_b) {
   let mouse_x = -1;
   let mouse_y = -1;
-  let mouse_left_down = false;
   let slide_horiz = true;
 
-  const image_a = await load_image(gl, image_url_a);
-  const image_b = await load_image(gl, image_url_b);
-  const active_image = image_a;
+  const vertex_shader_source = `#version 300 es
+    in vec4 a_position;
+    in vec2 a_texcoord;
 
-  canvas.addEventListener('wheel', handle_wheel);
-  canvas.addEventListener('mousemove', handle_mouse_move);
-  canvas.addEventListener('mousedown', handle_mouse_down);
-  canvas.addEventListener('mouseup', handle_mouse_up);
-  canvas.addEventListener('mouseleave', handle_mouse_leave);
-  canvas.addEventListener('keydown', handle_key_down);
+    uniform mat4 u_matrix;
 
-  function handle_wheel(event) {
-    event.preventDefault();
-    const [local_x, local_y] = local_mouse_position(canvas, event.clientX, event.clientY);
-    transform.zoom_toward(local_x, local_y, event.deltaY);
-    update();
-  }
+    out vec2 v_texcoord;
 
-  function handle_mouse_move(event) {
-    const [local_x, local_y] = local_mouse_position(canvas, event.clientX, event.clientY);
+    void main() {
+       gl_Position = u_matrix * a_position;
+       v_texcoord = a_texcoord;
+    }
+  `;
 
-    if (mouse_left_down) {
-      transform.pan_move(local_x, local_y);
+  // https://jorenjoestar.github.io/post/pixel_art_filtering/
+  // https://github.com/Jam3/glsl-fast-gaussian-blur
+  const fragment_shader_source = `#version 300 es
+    precision highp float;
+
+    in vec2 v_texcoord;
+
+    uniform sampler2D tex;
+    uniform float u_scale;
+
+    out vec4 outColor;
+
+    vec2 uv_iq(vec2 uv, ivec2 texture_size) {
+      vec2 pixel = uv * vec2(texture_size);
+
+      vec2 seam = floor(pixel + 0.5);
+      vec2 dudv = fwidth(pixel);
+      pixel = seam + clamp((pixel - seam) / dudv, -0.5, 0.5);
+
+      return pixel / vec2(texture_size);
     }
 
-    if (mode === MODE_SLIDE) {
-      mouse_x = local_x;
-      mouse_y = local_y;
+    vec4 blur9(sampler2D image, vec2 uv, vec2 resolution, vec2 direction) {
+      vec4 color = vec4(0.0);
+      vec2 off1 = vec2(1.3846153846) * direction;
+      vec2 off2 = vec2(3.2307692308) * direction;
+      color += texture(image, uv) * 0.2270270270;
+      color += texture(image, uv + (off1 / resolution)) * 0.3162162162;
+      color += texture(image, uv - (off1 / resolution)) * 0.3162162162;
+      color += texture(image, uv + (off2 / resolution)) * 0.0702702703;
+      color += texture(image, uv - (off2 / resolution)) * 0.0702702703;
+      return color;
+    }
 
-      const horiz_edge = gl.canvas.width / 8;
-      const vert_edge = gl.canvas.height / 8;
-      if (mouse_y < vert_edge || mouse_y > canvas.height - vert_edge) {
-        slide_horiz = false;
-      } else if (mouse_x < horiz_edge || mouse_x > canvas.width - horiz_edge) {
-        slide_horiz = true;
+    void main() {
+      if (u_scale > 2.0) {
+        vec2 uv = uv_iq(v_texcoord, textureSize(tex, 0));
+        outColor = texture(tex, uv);
+      } else if (u_scale < 0.2) {
+        outColor = blur9(tex, v_texcoord, vec2(textureSize(tex, 0)), vec2(1.0, 1.0));
+      } else {
+        outColor = texture(tex, v_texcoord);
       }
     }
-    canvas.focus();
-    update();
-  }
+  `;
 
-  function handle_mouse_down(event) {
-    if (event.which === 1) {
-      const [local_x, local_y] = local_mouse_position(canvas, event.clientX, event.clientY);
-      mouse_left_down = true;
-      transform.pan_start(local_x, local_y);
-    }
-    update();
-  }
-
-  function handle_mouse_up(event) {
-    if (event.which === 1) {
-      mouse_left_down = false;
-    }
-    update();
-  }
-
-  function handle_mouse_leave() {
-    mouse_left_down = false;
-    update();
-  }
-
-  function handle_key_down(event) {
-    if (event.keyCode === F_KEY) {
-      fit();
-    }
-
-    update();
-  }
-
-  function fit() {
-    transform.fit(
-      active_image.width,
-      active_image.height,
-      gl.canvas.width,
-      gl.canvas.height
-    );
-  }
-
+  const gl = canvas.getContext('webgl2');
   const vertex_shader = create_shader(gl, gl.VERTEX_SHADER, vertex_shader_source);
   const fragment_shader = create_shader(gl, gl.FRAGMENT_SHADER, fragment_shader_source);
 
@@ -354,13 +270,108 @@ async function CloseUp(image_url_a, image_url_b) {
 
     gl.uniform1f(scale_location, t.get_scale());
 
-    const offset = 0;
-    const count = 6;
-    gl.drawArrays(gl.TRIANGLES, offset, count);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
+  function fit() {
+    const max_height = Math.max(image_a.height, image_b.height);
+    const max_width = Math.max(image_a.width, image_b.width);
+    transform.fit(max_width, max_height, canvas.width, canvas.height);
+  }
 
   function draw() {
+    draw_image(
+      transform,
+      image_a.texture,
+      0, 0,
+      image_a.width, image_a.height,
+    );
+  }
+
+  return {
+    id: MODE_SLIDE,
+    draw,
+    fit,
+    on_key_down: () => {},
+    on_mouse_move: () => {},
+    on_mouse_down: () => {},
+    on_mouse_up: () => {},
+    on_mouse_leave: () => {},
+    on_wheel: () => {},
+  };
+}
+
+async function CloseUp(image_url_a, image_url_b) {
+  const canvas = document.getElementById('canvas');
+  const gl = canvas.getContext('webgl2');
+
+  let transform = new Transform();
+  let mouse_left_down = false;
+
+  const image_a = await load_image(gl, image_url_a);
+  const image_b = await load_image(gl, image_url_b);
+  const active_image = image_a;
+
+  let mode = Slide(canvas, transform, image_a, image_b);
+
+  canvas.addEventListener('wheel', handle_wheel);
+  canvas.addEventListener('mousemove', handle_mouse_move);
+  canvas.addEventListener('mousedown', handle_mouse_down);
+  canvas.addEventListener('mouseup', handle_mouse_up);
+  canvas.addEventListener('mouseleave', handle_mouse_leave);
+  canvas.addEventListener('keydown', handle_key_down);
+
+  function handle_wheel(event) {
+    event.preventDefault();
+    const [local_x, local_y] = local_mouse_position(canvas, event.clientX, event.clientY);
+    transform.zoom_toward(local_x, local_y, event.deltaY);
+    mode.on_wheel(event);
+    update();
+  }
+
+  function handle_mouse_move(event) {
+    const [local_x, local_y] = local_mouse_position(canvas, event.clientX, event.clientY);
+    if (mouse_left_down) {
+      transform.pan_move(local_x, local_y);
+    }
+    mode.on_mouse_move(event);
+    canvas.focus();
+    update();
+  }
+
+  function handle_mouse_down(event) {
+    if (event.which === 1) {
+      const [local_x, local_y] = local_mouse_position(canvas, event.clientX, event.clientY);
+      mouse_left_down = true;
+      transform.pan_start(local_x, local_y);
+    }
+    mode.on_mouse_down(event);
+    update();
+  }
+
+  function handle_mouse_up(event) {
+    if (event.which === 1) {
+      mouse_left_down = false;
+    }
+    mode.on_mouse_up(event);
+    update();
+  }
+
+  function handle_mouse_leave(event) {
+    mouse_left_down = false;
+    mode.on_mouse_leave(event);
+    update();
+  }
+
+  function handle_key_down(event) {
+    if (event.keyCode === F_KEY) {
+      mode.fit();
+    }
+    mode.on_key_down(event);
+    update();
+  }
+
+  function update() {
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     gl.clearColor(0.96, 0.96, 0.96, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -369,18 +380,10 @@ async function CloseUp(image_url_a, image_url_b) {
     gl.depthFunc(gl.LEQUAL);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-    draw_image(
-      transform,
-      active_image.texture,
-      0, 0,
-      active_image.width, active_image.height,
-    );
+    mode.draw();
   }
 
-  function update() {
-    draw();
-  }
+  mode.fit();
   update();
 }
 
