@@ -37,7 +37,6 @@ body {
 
 #canvas {
   outline: none;
-  image-rendering: smooth;
 }
 
 #left-panel {
