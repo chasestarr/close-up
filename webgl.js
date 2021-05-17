@@ -152,11 +152,82 @@ function local_mouse_position(canvas, global_x, global_y) {
   return [x, y];
 }
 
-function Slide(canvas, transform, image_a, image_b) {
+function SlideHandle(canvas) {
+  const vertex_shader_source = `#version 300 es
+    in vec4 a_position;
+    uniform mat4 u_matrix;
+
+    void main() {
+       gl_Position = u_matrix * a_position;
+    }
+  `;
+
+  const fragment_shader_source = `#version 300 es
+    precision highp float;
+    out vec4 outColor;
+
+    void main() {
+      outColor = vec4(1.0, 0.855, 0.227, 1.0);
+    }
+  `;
+
   let mouse_x = -1;
   let mouse_y = -1;
   let slide_horiz = true;
 
+  const gl = canvas.getContext('webgl2');
+  const vertex_shader = create_shader(gl, gl.VERTEX_SHADER, vertex_shader_source);
+  const fragment_shader = create_shader(gl, gl.FRAGMENT_SHADER, fragment_shader_source);
+  const program = create_program(gl, vertex_shader, fragment_shader);
+
+  const position_attribute_location = gl.getAttribLocation(program, "a_position");
+  const matrix_location = gl.getUniformLocation(program, "u_matrix");
+
+  const position_buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, position_buffer);
+  const positions = [
+    0, 0, 0, 1, 1, 0,
+    1, 0, 0, 1, 1, 1,
+  ];
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(position_attribute_location);
+  gl.vertexAttribPointer(position_attribute_location, 2, gl.FLOAT, true, 0, 0);
+
+  function draw() {
+    gl.useProgram(program);
+
+    const matrix = mat4.create();
+    mat4.ortho(matrix, 0, gl.canvas.clientWidth, gl.canvas.clientHeight, 0, -1, 1);
+    if (slide_horiz) {
+      mat4.translate(matrix, matrix, [mouse_x, 0, 0]);
+      mat4.scale(matrix, matrix, [1, canvas.height, 1]);
+    } else {
+      mat4.translate(matrix, matrix, [0, mouse_y, 0]);
+      mat4.scale(matrix, matrix, [canvas.width, 1, 1]);
+    }
+
+    gl.uniformMatrix4fv(matrix_location, false, matrix);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  function set_slide_direction(is_slide_horiz) {
+    slide_horiz = is_slide_horiz;
+  }
+
+  function on_mouse_move(event, local_x, local_y) {
+    mouse_x = local_x;
+    mouse_y = local_y;
+  }
+
+  return {
+    draw,
+    set_slide_direction,
+    on_mouse_move,
+  };
+}
+
+function Slide(canvas, transform, image_a, image_b) {
   const vertex_shader_source = `#version 300 es
     in vec4 a_position;
     in vec2 a_texcoord;
@@ -173,13 +244,17 @@ function Slide(canvas, transform, image_a, image_b) {
 
   // https://jorenjoestar.github.io/post/pixel_art_filtering/
   // https://github.com/Jam3/glsl-fast-gaussian-blur
+  // https://www.shadertoy.com/view/fs2Xzy
   const fragment_shader_source = `#version 300 es
     precision highp float;
 
     in vec2 v_texcoord;
 
-    uniform sampler2D tex;
+    uniform sampler2D u_texture_a;
+    uniform sampler2D u_texture_b;
     uniform float u_scale;
+    uniform bool u_slide_horiz;
+    uniform vec2 u_mouse;
 
     out vec4 outColor;
 
@@ -205,32 +280,53 @@ function Slide(canvas, transform, image_a, image_b) {
       return color;
     }
 
-    void main() {
+    vec4 color(sampler2D image, vec2 coord) {
       if (u_scale > 2.0) {
-        vec2 uv = uv_iq(v_texcoord, textureSize(tex, 0));
-        outColor = texture(tex, uv);
+        vec2 uv = uv_iq(coord, textureSize(image, 0));
+        return texture(image, uv);
       } else if (u_scale < 0.2) {
-        outColor = blur9(tex, v_texcoord, vec2(textureSize(tex, 0)), vec2(1.0, 1.0));
+        return blur9(image, coord, vec2(textureSize(image, 0)), vec2(1.0, 1.0));
       } else {
-        outColor = texture(tex, v_texcoord);
+        return texture(image, coord);
+      }
+    }
+
+    void main() {
+      if (u_slide_horiz) {
+        if (v_texcoord.x <= u_mouse.x) {
+          outColor = color(u_texture_a, v_texcoord);
+        } else {
+          outColor = color(u_texture_b, v_texcoord);
+        }
+      } else {
+        if (v_texcoord.y <= u_mouse.y) {
+          outColor = color(u_texture_a, v_texcoord);
+        } else {
+          outColor = color(u_texture_b, v_texcoord);
+        }
       }
     }
   `;
 
+  let mouse_x = -1;
+  let mouse_y = -1;
+  let slide_horiz = true;
+
+  const handle = SlideHandle(canvas);
+
   const gl = canvas.getContext('webgl2');
   const vertex_shader = create_shader(gl, gl.VERTEX_SHADER, vertex_shader_source);
   const fragment_shader = create_shader(gl, gl.FRAGMENT_SHADER, fragment_shader_source);
-
   const program = create_program(gl, vertex_shader, fragment_shader);
 
   const position_attribute_location = gl.getAttribLocation(program, "a_position");
   const texcoord_attribute_location = gl.getAttribLocation(program, "a_texcoord");
   const matrix_location = gl.getUniformLocation(program, "u_matrix");
-  const texture_location = gl.getUniformLocation(program, "u_texture");
+  const texture_a_location = gl.getUniformLocation(program, "u_texture_a");
+  const texture_b_location = gl.getUniformLocation(program, "u_texture_b");
   const scale_location = gl.getUniformLocation(program, "u_scale");
-
-  const vao = gl.createVertexArray();
-  gl.bindVertexArray(vao);
+  const slide_horiz_location = gl.getUniformLocation(program, "u_slide_horiz");
+  const mouse_location = gl.getUniformLocation(program, "u_mouse");
 
   const position_buffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, position_buffer);
@@ -252,57 +348,66 @@ function Slide(canvas, transform, image_a, image_b) {
   gl.enableVertexAttribArray(texcoord_attribute_location);
   gl.vertexAttribPointer(texcoord_attribute_location, 2, gl.FLOAT, true, 0, 0);
 
-  function draw_image(t, tex, dst_x, dst_y, src_w, src_h) {
-    gl.useProgram(program);
-    gl.bindVertexArray(vao);
-
-    const texture_unit = 0;
-    gl.uniform1i(texture_location, texture_unit);
-    gl.activeTexture(gl.TEXTURE0 + texture_unit);
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-
-    const matrix = mat4.create();
-    mat4.ortho(matrix, 0, gl.canvas.clientWidth, gl.canvas.clientHeight, 0, -1, 1);
-    mat4.multiply(matrix, matrix, t.mat);
-    mat4.translate(matrix, matrix, [dst_x, dst_y, 0]);
-    mat4.scale(matrix, matrix, [src_w, src_h, 1]);
-    gl.uniformMatrix4fv(matrix_location, false, matrix);
-
-    gl.uniform1f(scale_location, t.get_scale());
-
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-  }
-
   function fit() {
     const max_height = Math.max(image_a.height, image_b.height);
     const max_width = Math.max(image_a.width, image_b.width);
     transform.fit(max_width, max_height, canvas.width, canvas.height);
   }
 
+  function on_mouse_move(event, local_x, local_y) {
+    mouse_x = local_x;
+    mouse_y = local_y;
+
+    const horiz_edge = canvas.width / 8;
+    const vert_edge = canvas.height / 8;
+    if (mouse_y < vert_edge || mouse_y > canvas.height - vert_edge) {
+      slide_horiz = false;
+    } else if (mouse_x < horiz_edge || mouse_x > canvas.width - horiz_edge) {
+      slide_horiz = true;
+    }
+
+    handle.set_slide_direction(slide_horiz);
+    handle.on_mouse_move(event, local_x, local_y);
+  }
+
   function draw() {
-    draw_image(
-      transform,
-      image_a.texture,
-      0, 0,
-      image_a.width, image_a.height,
-    );
+    gl.useProgram(program);
+
+    gl.uniform1i(texture_a_location, 0);
+    gl.activeTexture(gl.TEXTURE0 + 0);
+    gl.bindTexture(gl.TEXTURE_2D, image_a.texture);
+
+    gl.uniform1i(texture_b_location, 1);
+    gl.activeTexture(gl.TEXTURE0 + 1);
+    gl.bindTexture(gl.TEXTURE_2D, image_b.texture);
+
+    const matrix = mat4.create();
+    mat4.ortho(matrix, 0, gl.canvas.clientWidth, gl.canvas.clientHeight, 0, -1, 1);
+    mat4.multiply(matrix, matrix, transform.mat);
+    mat4.scale(matrix, matrix, [image_a.width, image_a.height, 1]);
+    gl.uniformMatrix4fv(matrix_location, false, matrix);
+
+    gl.uniform1f(scale_location, transform.get_scale());
+    gl.uniform1f(slide_horiz_location, slide_horiz ? 1 : 0);
+
+    const inverse = mat4.invert(mat4.create(), transform.mat);
+    const [local_mouse_x, local_mouse_y] = vec2.transformMat4([], [mouse_x, mouse_y], inverse);
+    gl.uniform2f(mouse_location, local_mouse_x / image_a.width, local_mouse_y / image_a.height);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    handle.draw();
   }
 
   return {
     id: MODE_SLIDE,
     draw,
     fit,
-    on_key_down: () => {},
-    on_mouse_move: () => {},
-    on_mouse_down: () => {},
-    on_mouse_up: () => {},
-    on_mouse_leave: () => {},
-    on_wheel: () => {},
+    on_mouse_move,
   };
 }
 
-async function CloseUp(image_url_a, image_url_b) {
-  const canvas = document.getElementById('canvas');
+async function CloseUp(canvas, image_url_a, image_url_b) {
   const gl = canvas.getContext('webgl2');
 
   let transform = new Transform();
@@ -310,7 +415,6 @@ async function CloseUp(image_url_a, image_url_b) {
 
   const image_a = await load_image(gl, image_url_a);
   const image_b = await load_image(gl, image_url_b);
-  const active_image = image_a;
 
   let mode = Slide(canvas, transform, image_a, image_b);
 
@@ -325,7 +429,9 @@ async function CloseUp(image_url_a, image_url_b) {
     event.preventDefault();
     const [local_x, local_y] = local_mouse_position(canvas, event.clientX, event.clientY);
     transform.zoom_toward(local_x, local_y, event.deltaY);
-    mode.on_wheel(event);
+    if (mode.on_wheel) {
+      mode.on_wheel(event);
+    }
     update();
   }
 
@@ -334,7 +440,9 @@ async function CloseUp(image_url_a, image_url_b) {
     if (mouse_left_down) {
       transform.pan_move(local_x, local_y);
     }
-    mode.on_mouse_move(event);
+    if (mode.on_mouse_move) {
+      mode.on_mouse_move(event, local_x, local_y);
+    }
     canvas.focus();
     update();
   }
@@ -345,7 +453,9 @@ async function CloseUp(image_url_a, image_url_b) {
       mouse_left_down = true;
       transform.pan_start(local_x, local_y);
     }
-    mode.on_mouse_down(event);
+    if (mode.on_mouse_down) {
+      mode.on_mouse_down(event);
+    }
     update();
   }
 
@@ -353,13 +463,17 @@ async function CloseUp(image_url_a, image_url_b) {
     if (event.which === 1) {
       mouse_left_down = false;
     }
-    mode.on_mouse_up(event);
+    if (mode.on_mouse_up) {
+      mode.on_mouse_up(event);
+    }
     update();
   }
 
   function handle_mouse_leave(event) {
     mouse_left_down = false;
-    mode.on_mouse_leave(event);
+    if (mode.on_mouse_leave) {
+      mode.on_mouse_leave(event);
+    }
     update();
   }
 
@@ -367,7 +481,9 @@ async function CloseUp(image_url_a, image_url_b) {
     if (event.keyCode === F_KEY) {
       mode.fit();
     }
-    mode.on_key_down(event);
+    if (mode.on_key_down) {
+      mode.on_key_down(event);
+    }
     update();
   }
 
@@ -388,7 +504,9 @@ async function CloseUp(image_url_a, image_url_b) {
 }
 
 function main() {
-  CloseUp('images/snuff-out.png', 'images/statecraft.png');
+  const canvas = document.getElementById('canvas');
+  CloseUp(document.getElementById('canvas-1'), 'images/snuff-out.png', 'images/statecraft.png');
+  CloseUp(document.getElementById('canvas-2'), 'images/morris-cannonballs-off.jpeg', 'images/morris-cannonballs-on.jpeg');
 }
 
 main();
