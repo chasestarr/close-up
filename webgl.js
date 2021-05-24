@@ -15,6 +15,10 @@ class Transform {
     return this.mat[0];
   }
 
+  get_translate() {
+    return [this.mat[12], this.mat[13]];
+  }
+
   pan_start(x, y) {
     this.pan_prev_x = x;
     this.pan_prev_y = y;
@@ -56,7 +60,6 @@ class Transform {
       this.mat[5] = scale;
       this.mat[12] = 0;
       this.mat[13] = bounds_height / 2 - subject_height * scale / 2;
-
     }
   }
 }
@@ -150,6 +153,144 @@ function local_mouse_position(canvas, global_x, global_y) {
   const x = Math.min(canvas.width, Math.max(0, global_x - canvasRect.left + window.scrollX));
   const y = Math.min(canvas.height, Math.max(0, global_y - canvasRect.top + window.scrollY));
   return [x, y];
+}
+
+function TwoUp(canvas, transform, image_a, image_b) {
+  const vertex_shader_source = `#version 300 es
+    in vec4 a_position;
+    in vec2 a_texcoord;
+
+    uniform mat4 u_matrix;
+    uniform mat4 u_texture_matrix;
+
+    out vec2 v_texcoord;
+
+    void main() {
+      gl_Position = u_matrix * a_position;
+      v_texcoord = (u_texture_matrix * vec4(a_texcoord, 0, 1)).xy;
+    }
+  `;
+
+  // https://jorenjoestar.github.io/post/pixel_art_filtering/
+  // https://github.com/Jam3/glsl-fast-gaussian-blur
+  // https://www.shadertoy.com/view/fs2Xzy
+  const fragment_shader_source = `#version 300 es
+    precision highp float;
+
+    in vec2 v_texcoord;
+
+    uniform sampler2D u_texture;
+    uniform float u_scale;
+
+    out vec4 outColor;
+
+    vec2 uv_iq(vec2 uv, ivec2 texture_size) {
+      vec2 pixel = uv * vec2(texture_size);
+
+      vec2 seam = floor(pixel + 0.5);
+      vec2 dudv = fwidth(pixel);
+      pixel = seam + clamp((pixel - seam) / dudv, -0.5, 0.5);
+
+      return pixel / vec2(texture_size);
+    }
+
+    vec4 blur9(sampler2D image, vec2 uv, vec2 resolution, vec2 direction) {
+      vec4 color = vec4(0.0);
+      vec2 off1 = vec2(1.3846153846) * direction;
+      vec2 off2 = vec2(3.2307692308) * direction;
+      color += texture(image, uv) * 0.2270270270;
+      color += texture(image, uv + (off1 / resolution)) * 0.3162162162;
+      color += texture(image, uv - (off1 / resolution)) * 0.3162162162;
+      color += texture(image, uv + (off2 / resolution)) * 0.0702702703;
+      color += texture(image, uv - (off2 / resolution)) * 0.0702702703;
+      return color;
+    }
+
+    vec4 color(sampler2D image, vec2 coord) {
+      if (u_scale > 2.0) {
+        vec2 uv = uv_iq(coord, textureSize(image, 0));
+        return texture(image, uv);
+      } else if (u_scale < 0.2) {
+        return blur9(image, coord, vec2(textureSize(image, 0)), vec2(1.0, 1.0));
+      } else {
+        return texture(image, coord);
+      }
+    }
+
+    void main() {
+      outColor = color(u_texture, v_texcoord);
+    }
+  `;
+
+  const gl = canvas.getContext('webgl2');
+  const vertex_shader = create_shader(gl, gl.VERTEX_SHADER, vertex_shader_source);
+  const fragment_shader = create_shader(gl, gl.FRAGMENT_SHADER, fragment_shader_source);
+  const program = create_program(gl, vertex_shader, fragment_shader);
+
+  const position_attribute_location = gl.getAttribLocation(program, "a_position");
+  const texcoord_attribute_location = gl.getAttribLocation(program, "a_texcoord");
+  const matrix_location = gl.getUniformLocation(program, "u_matrix");
+  const texture_location = gl.getUniformLocation(program, "u_texture");
+  const texture_matrix_location = gl.getUniformLocation(program, "u_texture_matrix");
+  const scale_location = gl.getUniformLocation(program, "u_scale");
+
+  const position_buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, position_buffer);
+  const positions = [
+    0, 0, 0, 1, 1, 0,
+    1, 0, 0, 1, 1, 1,
+  ];
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(position_attribute_location);
+  gl.vertexAttribPointer(position_attribute_location, 2, gl.FLOAT, true, 0, 0);
+
+  const texcoord_buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, texcoord_buffer);
+  const texcoords = [
+    0, 0, 0, 1, 1, 0,
+    1, 0, 0, 1, 1, 1,
+  ];
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texcoords), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(texcoord_attribute_location);
+  gl.vertexAttribPointer(texcoord_attribute_location, 2, gl.FLOAT, true, 0, 0);
+
+  function draw_image(image, sx, sy, sw, sh, dx, dy, dw, dh) {
+    gl.uniform1i(texture_location, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, image.texture);
+
+    const matrix = mat4.create();
+    mat4.ortho(matrix, 0, gl.canvas.clientWidth, gl.canvas.clientHeight, 0, -1, 1);
+    mat4.multiply(matrix, matrix, transform.mat);
+    mat4.translate(matrix, matrix, [dx, dy, 0]);
+    mat4.scale(matrix, matrix, [dw, dh, 1]);
+    gl.uniformMatrix4fv(matrix_location, false, matrix);
+
+    const tex_matrix = mat4.create();
+    mat4.translate(tex_matrix, tex_matrix, [sx / image.width, sy / image.height, 0]);
+    mat4.scale(tex_matrix, tex_matrix, [sw / image.width, sh / image.height, 0]);
+    gl.uniformMatrix4fv(texture_matrix_location, false, tex_matrix);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  function draw() {
+    gl.useProgram(program);
+
+    gl.uniform1f(scale_location, transform.get_scale());
+
+    draw_image(image_a, 0, 0, image_a.width, image_a.height, 0, 0, 100, 100);
+    draw_image(image_b, 0, 0, image_b.width, image_b.height, gl.canvas.width / 2, 0, 100, 100);
+  }
+
+  function fit() {
+
+  }
+
+  return {
+    draw,
+    fit,
+  };
 }
 
 function SlideHandle(canvas) {
@@ -400,7 +541,6 @@ function Slide(canvas, transform, image_a, image_b) {
   }
 
   return {
-    id: MODE_SLIDE,
     draw,
     fit,
     on_mouse_move,
@@ -416,7 +556,8 @@ async function CloseUp(canvas, image_url_a, image_url_b) {
   const image_a = await load_image(gl, image_url_a);
   const image_b = await load_image(gl, image_url_b);
 
-  let mode = Slide(canvas, transform, image_a, image_b);
+  // let mode = Slide(canvas, transform, image_a, image_b);
+  let mode = TwoUp(canvas, transform, image_a, image_b);
 
   canvas.addEventListener('wheel', handle_wheel);
   canvas.addEventListener('mousemove', handle_mouse_move);
