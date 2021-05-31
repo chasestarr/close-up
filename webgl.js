@@ -254,14 +254,14 @@ function TwoUp(canvas, transform, image_a, image_b) {
   gl.enableVertexAttribArray(texcoord_attribute_location);
   gl.vertexAttribPointer(texcoord_attribute_location, 2, gl.FLOAT, true, 0, 0);
 
-  function draw_image(image, sx, sy, sw, sh, dx, dy, dw, dh) {
+  function draw_image(t, image, sx, sy, sw, sh, dx, dy, dw, dh) {
     gl.uniform1i(texture_location, 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, image.texture);
 
     const matrix = mat4.create();
     mat4.ortho(matrix, 0, gl.canvas.clientWidth, gl.canvas.clientHeight, 0, -1, 1);
-    mat4.multiply(matrix, matrix, transform.mat);
+    mat4.multiply(matrix, matrix, t.mat);
     mat4.translate(matrix, matrix, [dx, dy, 0]);
     mat4.scale(matrix, matrix, [dw, dh, 1]);
     gl.uniformMatrix4fv(matrix_location, false, matrix);
@@ -274,22 +274,62 @@ function TwoUp(canvas, transform, image_a, image_b) {
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
+  function draw_left() {
+    const inverse = mat4.invert(mat4.create(), transform.mat);
+    const [mid] = vec2.transformMat4([], [gl.canvas.width / 2, 0], inverse);
+    const width = Math.min(image_a.width, mid);
+    draw_image(
+      transform,
+      image_a,
+      0, 0, width, image_a.height,
+      0, 0, width, image_a.height
+    );
+  }
+
+  function draw_right() {
+    const frame_width = gl.canvas.width / 2;
+    const right = new Transform();
+    mat4.translate(right.mat, right.mat, [frame_width, 0, 0]);
+    mat4.multiply(right.mat, right.mat, transform.mat);
+    const r_inverse = mat4.invert(mat4.create(), right.mat);
+    const [r_mid] = vec2.transformMat4([], [frame_width, 0], r_inverse);
+
+    const width = Math.min(image_b.width, image_b.width - r_mid);
+    const x = Math.max(0, r_mid);
+    draw_image(
+      right,
+      image_b,
+      x, 0, width, image_b.height,
+      x, 0, width, image_b.height
+    );
+  }
+
   function draw() {
     gl.useProgram(program);
-
     gl.uniform1f(scale_location, transform.get_scale());
-
-    draw_image(image_a, 0, 0, image_a.width, image_a.height, 0, 0, 100, 100);
-    draw_image(image_b, 0, 0, image_b.width, image_b.height, gl.canvas.width / 2, 0, 100, 100);
+    draw_left();
+    draw_right();
   }
 
   function fit() {
+    const max_height = Math.max(image_a.height, image_b.height);
+    const max_width = Math.max(image_a.width, image_b.width);
+    transform.fit(max_width, max_height, canvas.width / 2, canvas.height);
+  }
 
+  function on_wheel(event, local_x, local_y) {
+    const frame_width = gl.canvas.width / 2;
+    transform.zoom_toward(
+      local_x > frame_width ? local_x - frame_width : local_x,
+      local_y,
+      event.deltaY
+    );
   }
 
   return {
     draw,
     fit,
+    on_wheel,
   };
 }
 
@@ -511,6 +551,10 @@ function Slide(canvas, transform, image_a, image_b) {
     handle.on_mouse_move(event, local_x, local_y);
   }
 
+  function on_wheel(event, local_x, local_y) {
+    transform.zoom_toward(local_x, local_y, event.deltaY);
+  }
+
   function draw() {
     gl.useProgram(program);
 
@@ -543,6 +587,7 @@ function Slide(canvas, transform, image_a, image_b) {
   return {
     draw,
     fit,
+    on_wheel,
     on_mouse_move,
   };
 }
@@ -569,9 +614,9 @@ async function CloseUp(canvas, image_url_a, image_url_b) {
   function handle_wheel(event) {
     event.preventDefault();
     const [local_x, local_y] = local_mouse_position(canvas, event.clientX, event.clientY);
-    transform.zoom_toward(local_x, local_y, event.deltaY);
+    // transform.zoom_toward(local_x, local_y, event.deltaY);
     if (mode.on_wheel) {
-      mode.on_wheel(event);
+      mode.on_wheel(event, local_x, local_y);
     }
     update();
   }
