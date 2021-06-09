@@ -155,6 +155,155 @@ function local_mouse_position(canvas, global_x, global_y) {
   return [x, y];
 }
 
+function Overlay(canvas, transform, image_a, image_b) {
+  const vertex_shader_source = `#version 300 es
+    in vec4 a_position;
+    in vec2 a_texcoord;
+
+    uniform mat4 u_matrix;
+
+    out vec2 v_texcoord;
+
+    void main() {
+       gl_Position = u_matrix * a_position;
+       v_texcoord = a_texcoord;
+    }
+`;
+
+  // https://jorenjoestar.github.io/post/pixel_art_filtering/
+  // https://github.com/Jam3/glsl-fast-gaussian-blur
+  // https://www.shadertoy.com/view/fs2Xzy
+  const fragment_shader_source = `#version 300 es
+    precision highp float;
+
+    in vec2 v_texcoord;
+
+    uniform sampler2D u_texture_a;
+    uniform sampler2D u_texture_b;
+    uniform float u_scale;
+    uniform float u_opacity;
+
+    out vec4 outColor;
+
+    vec2 uv_iq(vec2 uv, ivec2 texture_size) {
+      vec2 pixel = uv * vec2(texture_size);
+
+      vec2 seam = floor(pixel + 0.5);
+      vec2 dudv = fwidth(pixel);
+      pixel = seam + clamp((pixel - seam) / dudv, -0.5, 0.5);
+
+      return pixel / vec2(texture_size);
+    }
+
+    vec4 blur9(sampler2D image, vec2 uv, vec2 resolution, vec2 direction) {
+      vec4 color = vec4(0.0);
+      vec2 off1 = vec2(1.3846153846) * direction;
+      vec2 off2 = vec2(3.2307692308) * direction;
+      color += texture(image, uv) * 0.2270270270;
+      color += texture(image, uv + (off1 / resolution)) * 0.3162162162;
+      color += texture(image, uv - (off1 / resolution)) * 0.3162162162;
+      color += texture(image, uv + (off2 / resolution)) * 0.0702702703;
+      color += texture(image, uv - (off2 / resolution)) * 0.0702702703;
+      return color;
+    }
+
+    vec4 color(sampler2D image, vec2 coord) {
+      if (u_scale > 2.0) {
+        vec2 uv = uv_iq(coord, textureSize(image, 0));
+        return texture(image, uv);
+      } else if (u_scale < 0.2) {
+        return blur9(image, coord, vec2(textureSize(image, 0)), vec2(1.0, 1.0));
+      } else {
+        return texture(image, coord);
+      }
+    }
+
+    void main() {
+      outColor = color(u_texture_a, v_texcoord) * (1.0 - u_opacity) + color(u_texture_b, v_texcoord) * u_opacity;
+      // outColor = vec4(u_opacity, 0.0, 1.0, 1);
+    }
+`;
+
+  let mouse_x = 0;
+
+  const gl = canvas.getContext('webgl2');
+  const vertex_shader = create_shader(gl, gl.VERTEX_SHADER, vertex_shader_source);
+  const fragment_shader = create_shader(gl, gl.FRAGMENT_SHADER, fragment_shader_source);
+  const program = create_program(gl, vertex_shader, fragment_shader);
+
+  const position_attribute_location = gl.getAttribLocation(program, "a_position");
+  const texcoord_attribute_location = gl.getAttribLocation(program, "a_texcoord");
+  const matrix_location = gl.getUniformLocation(program, "u_matrix");
+  const texture_a_location = gl.getUniformLocation(program, "u_texture_a");
+  const texture_b_location = gl.getUniformLocation(program, "u_texture_b");
+  const scale_location = gl.getUniformLocation(program, "u_scale");
+  const opacity_location = gl.getUniformLocation(program, "u_opacity");
+
+  const position_buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, position_buffer);
+  const positions = [
+    0, 0, 0, 1, 1, 0,
+    1, 0, 0, 1, 1, 1,
+  ];
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(position_attribute_location);
+  gl.vertexAttribPointer(position_attribute_location, 2, gl.FLOAT, true, 0, 0);
+
+  const texcoord_buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, texcoord_buffer);
+  const texcoords = [
+    0, 0, 0, 1, 1, 0,
+    1, 0, 0, 1, 1, 1,
+  ];
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texcoords), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(texcoord_attribute_location);
+  gl.vertexAttribPointer(texcoord_attribute_location, 2, gl.FLOAT, true, 0, 0);
+
+  function fit() {
+    const max_height = Math.max(image_a.height, image_b.height);
+    const max_width = Math.max(image_a.width, image_b.width);
+    transform.fit(max_width, max_height, canvas.width, canvas.height);
+  }
+
+  function on_mouse_move(event, local_x, local_y) {
+    mouse_x = local_x;
+  }
+
+  function on_wheel(event, local_x, local_y) {
+    transform.zoom_toward(local_x, local_y, event.deltaY);
+  }
+
+  function draw() {
+    gl.useProgram(program);
+
+    gl.uniform1i(texture_a_location, 0);
+    gl.activeTexture(gl.TEXTURE0 + 0);
+    gl.bindTexture(gl.TEXTURE_2D, image_a.texture);
+
+    gl.uniform1i(texture_b_location, 1);
+    gl.activeTexture(gl.TEXTURE0 + 1);
+    gl.bindTexture(gl.TEXTURE_2D, image_b.texture);
+
+    const matrix = mat4.create();
+    mat4.ortho(matrix, 0, gl.canvas.clientWidth, gl.canvas.clientHeight, 0, -1, 1);
+    mat4.multiply(matrix, matrix, transform.mat);
+    mat4.scale(matrix, matrix, [image_a.width, image_a.height, 1]);
+    gl.uniformMatrix4fv(matrix_location, false, matrix);
+
+    gl.uniform1f(scale_location, transform.get_scale());
+    gl.uniform1f(opacity_location, mouse_x / gl.canvas.width);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  return {
+    draw,
+    fit,
+    on_wheel,
+    on_mouse_move,
+  };
+}
+
 function TwoUp(canvas, transform, image_a, image_b) {
   const vertex_shader_source = `#version 300 es
     in vec4 a_position;
@@ -601,8 +750,9 @@ async function CloseUp(canvas, image_url_a, image_url_b) {
   const image_a = await load_image(gl, image_url_a);
   const image_b = await load_image(gl, image_url_b);
 
+  let mode = Overlay(canvas, transform, image_a, image_b);
   // let mode = Slide(canvas, transform, image_a, image_b);
-  let mode = TwoUp(canvas, transform, image_a, image_b);
+  // let mode = TwoUp(canvas, transform, image_a, image_b);
 
   canvas.addEventListener('wheel', handle_wheel);
   canvas.addEventListener('mousemove', handle_mouse_move);
@@ -690,7 +840,6 @@ async function CloseUp(canvas, image_url_a, image_url_b) {
 }
 
 function main() {
-  const canvas = document.getElementById('canvas');
   CloseUp(document.getElementById('canvas-1'), 'images/snuff-out.png', 'images/statecraft.png');
   CloseUp(document.getElementById('canvas-2'), 'images/morris-cannonballs-off.jpeg', 'images/morris-cannonballs-on.jpeg');
 }
