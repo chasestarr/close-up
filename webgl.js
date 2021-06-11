@@ -2,6 +2,8 @@ import { mat4, vec2 } from './vendor/gl-matrix/index.js';
 
 const MODE_TWO_UP = 0;
 const MODE_SLIDE = 1;
+const MODE_OVERLAY = 2;
+const MODE_DIFF = 3;
 const F_KEY = 70;
 
 class Transform {
@@ -150,8 +152,8 @@ async function load_image(gl, url) {
 
 function local_mouse_position(canvas, global_x, global_y) {
   const canvasRect = canvas.getBoundingClientRect();
-  const x = Math.min(canvas.width, Math.max(0, global_x - canvasRect.left + window.scrollX));
-  const y = Math.min(canvas.height, Math.max(0, global_y - canvasRect.top + window.scrollY));
+  const x = Math.min(canvas.width, Math.max(0, global_x - canvasRect.left));
+  const y = Math.min(canvas.height, Math.max(0, global_y - canvasRect.top));
   return [x, y];
 }
 
@@ -894,10 +896,7 @@ async function CloseUp(canvas, image_url_a, image_url_b) {
   const image_a = await load_image(gl, image_url_a);
   const image_b = await load_image(gl, image_url_b);
 
-  let mode = Diff(canvas, transform, image_a, image_b);
-  // let mode = Overlay(canvas, transform, image_a, image_b);
-  // let mode = Slide(canvas, transform, image_a, image_b);
-  // let mode = TwoUp(canvas, transform, image_a, image_b);
+  let mode = TwoUp(canvas, transform, image_a, image_b);
 
   canvas.addEventListener('wheel', handle_wheel);
   canvas.addEventListener('mousemove', handle_mouse_move);
@@ -905,6 +904,20 @@ async function CloseUp(canvas, image_url_a, image_url_b) {
   canvas.addEventListener('mouseup', handle_mouse_up);
   canvas.addEventListener('mouseleave', handle_mouse_leave);
   canvas.addEventListener('keydown', handle_key_down);
+
+  function set_mode(next_mode) {
+    if (next_mode === MODE_TWO_UP) {
+      mode = TwoUp(canvas, transform, image_a, image_b);
+    } else if (next_mode === MODE_SLIDE) {
+      mode = Slide(canvas, transform, image_a, image_b);
+    } else if (next_mode === MODE_OVERLAY) {
+      mode = Overlay(canvas, transform, image_a, image_b);
+    } else if (next_mode === MODE_DIFF) {
+      mode = Diff(canvas, transform, image_a, image_b);
+    }
+    mode.fit();
+    update();
+  }
 
   function handle_wheel(event) {
     event.preventDefault();
@@ -923,7 +936,7 @@ async function CloseUp(canvas, image_url_a, image_url_b) {
     if (mode.on_mouse_move) {
       mode.on_mouse_move(event, local_x, local_y);
     }
-    canvas.focus();
+    canvas.focus({preventScroll: true});
     update();
   }
 
@@ -981,12 +994,96 @@ async function CloseUp(canvas, image_url_a, image_url_b) {
 
   mode.fit();
   update();
+
+  return {
+    set_mode,
+  }
+}
+
+function ModeSelector(on_select) {
+  const modes = [
+    ['two up', MODE_TWO_UP],
+    ['slide', MODE_SLIDE],
+    ['overlay', MODE_OVERLAY],
+    ['diff', MODE_DIFF],
+  ];
+
+  const selected_style = 'color: blue;';
+
+  const container = document.createElement('div');
+
+  for (let i = 0; i < modes.length; i++) {
+    const [label, mode] = modes[i];
+    const button = document.createElement('button');
+
+    if (i === 0) {
+      button.style = selected_style;
+    }
+
+    button.textContent = label;
+    button.addEventListener('click', () => {
+      const buttons = container.querySelectorAll('button');
+      for (let b of buttons) {
+        b.style = null;
+      }
+      button.style = selected_style;
+
+      on_select(mode);
+    });
+
+    container.appendChild(button);
+  }
+
+  return container;
+}
+
+function Pair(parent, image_url_a, image_url_b) {
+  let set_mode = null;
+  let mode = MODE_TWO_UP;
+
+  function on_select(selected_mode) {
+    set_mode(selected_mode);
+  }
+
+  const container = document.createElement('div');
+  container.style = `
+    padding: 24px;
+  `;
+  const mode_selector = ModeSelector(on_select);
+  container.appendChild(mode_selector);
+
+  const canvas_container = document.createElement('div');
+  canvas_container.style = `
+    display: flex;
+    justify-content: center;
+  `;
+  container.appendChild(canvas_container);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 720;
+  canvas.height = 480;
+  canvas.setAttribute('tabindex', 0);
+  canvas_container.appendChild(canvas);
+  CloseUp(canvas, image_url_a, image_url_b).then(close_up => set_mode = close_up.set_mode);
+
+  return container;
 }
 
 function main() {
-  CloseUp(document.getElementById('canvas-1'), 'images/snuff-out.png', 'images/statecraft.png');
-  // CloseUp(document.getElementById('canvas-2'), 'images/ct-scan-01.jpg', 'images/ct-scan-02.jpg');
-  CloseUp(document.getElementById('canvas-2'), 'images/data-table-before.png', 'images/data-table-after.png');
+  const pairs = [
+    ['images/ct-scan-01.jpg', 'images/ct-scan-02.jpg'],
+    ['images/snuff-out.png', 'images/statecraft.png'],
+    ['images/data-table-before.png', 'images/data-table-after.png'],
+  ];
+
+  const body = document.querySelector('body');
+  body.style = `
+    overflow: auto;
+  `;
+  for (const pair of pairs) {
+    const p = Pair(container, ...pair);
+    container.appendChild(p);
+  }
 }
 
 main();
